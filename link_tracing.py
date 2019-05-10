@@ -225,7 +225,7 @@ def trace_reference_ties(subreddit):
 
     subreddit_metadata_text = execute_in_db(get_metadata_q, return_first_only = True)[0]
 
-    outgoing_references = [ref[1].lower() for ref in re.findall("(^|\s)r/([A-Za-z0-9_-]+)", subreddit_metadata_text)]
+    outgoing_references = [ref[1].lower() for ref in re.findall("(^|\s)(/)?r/([A-Za-z0-9_-]+)", subreddit_metadata_text)]
     outgoing_references = [ref for ref in outgoing_references if ref != subreddit]
 
     edgelist = [(subreddit, m, None) for m in outgoing_references]
