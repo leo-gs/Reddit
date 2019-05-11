@@ -205,30 +205,17 @@ def update_subreddit_metadata_table(edges_found, queue_table, step):
 ## Link tracing functions ##
 ############################
 
-
 ## Return list
-def trace_hyperlink_ties(subreddit):
+def trace_ties(subreddit, regexp):
     get_metadata_q = """ SELECT complete_metadata_text FROM t2_subreddit_metadata WHERE subreddit = '{}' """.format(subreddit)
 
     subreddit_metadata_text = execute_in_db(get_metadata_q, return_first_only = True)[0]
 
-    outgoing_hyperlinks = [link.lower() for link in re.findall("reddit.com/r/([A-Za-z0-9_-]+)", subreddit_metadata_text)]
+    outgoing_hyperlinks = [link[-1].lower() for link in re.findall(regexp, subreddit_metadata_text)]
+
     outgoing_hyperlinks = [link for link in outgoing_hyperlinks if link != subreddit]
 
     edgelist = [(subreddit, link, None) for link in outgoing_hyperlinks]
-
-    return(edgelist)
-
-## Return list
-def trace_reference_ties(subreddit):
-    get_metadata_q = """ SELECT complete_metadata_text FROM t2_subreddit_metadata WHERE subreddit = '{}' """.format(subreddit)
-
-    subreddit_metadata_text = execute_in_db(get_metadata_q, return_first_only = True)[0]
-
-    outgoing_references = [ref[1].lower() for ref in re.findall("(^|\s)(/)?r/([A-Za-z0-9_-]+)", subreddit_metadata_text)]
-    outgoing_references = [ref for ref in outgoing_references if ref != subreddit]
-
-    edgelist = [(subreddit, m, None) for m in outgoing_references]
 
     return(edgelist)
 
@@ -239,8 +226,8 @@ def trace_reference_ties(subreddit):
 
 ## Metadata Step: check if any subreddits need to have their metadata collected
 ## (i.e. if they are marked with has_metadata = 0 in the metadata table)
-def subreddit_metadata_step(reddit):
-    select_q = """ SELECT subreddit FROM t2_subreddit_metadata WHERE has_metadata = 0 """
+def subreddit_metadata_step(reddit, queue_table):
+    select_q = """ SELECT subreddit FROM t2_subreddit_metadata WHERE has_metadata = 0 AND subreddit IN (SELECT subreddit FROM {})""".format(queue_table)
 
     ## get list of subreddits without metadata (`has_metadata` = 0)
     queue = execute_in_db(select_q, return_first_only = True)
@@ -273,7 +260,7 @@ def subreddit_metadata_step(reddit):
 
 ## Snowball Step: scrape edges and add them to the database; if there are any
 ## new subreddits in the scraped edges, add them to the processing queue
-def snowball_step(edges_table, queue_table, edges_func):
+def snowball_step(edges_table, queue_table, trace_regexp):
     mark_no_metadata_q = """ UPDATE {} SET processed = -1 FROM t2_subreddit_metadata WHERE {}.subreddit = t2_subreddit_metadata.subreddit AND processed = 0 AND has_metadata = -1 """.format(queue_table, queue_table)
     select_subreddits_to_process_q = """ SELECT subreddit, step FROM {} WHERE processed = 0 ORDER BY step, subreddit """.format(queue_table)
     insert_edges_q = """ INSERT INTO {} (source, target, label) VALUES (%s, %s, %s) """.format(edges_table)
@@ -295,7 +282,7 @@ def snowball_step(edges_table, queue_table, edges_func):
         edges_to_upload = []
 
         ## process
-        edges_found = edges_func(next_subreddit)
+        edges_found = trace_ties(next_subreddit, trace_regexp)
         if edges_found:
             edges_found = list(set(edges_found)) ## get rid of duplicates
             edges_to_upload.extend(edges_found)
@@ -328,19 +315,18 @@ def check_num_unprocessed(queue_table):
 ## Get an authenticated Reddit API object
 reddit = init_reddit()
 
-# Pull metadata for seed subreddits
-subreddit_metadata_step(reddit)
-
 # Scrape hyperlink edges
-hyperlink_queue, hyperlink_edges = "t1a_hyperlink_queue", "t1a_hyperlink_ties"
-while check_num_unprocessed(queue_table=hyperlink_queue) > 0:
-    snowball_step(edges_table=hyperlink_edges, queue_table=hyperlink_queue, edges_func=trace_hyperlink_ties)
-    subreddit_metadata_step(reddit)
-print("Hyperlinks done.")
-
-# Scrape reference edges
+# hyperlink_queue, hyperlink_edges = "t1a_hyperlink_queue", "t1a_hyperlink_ties"
+# link_exp = "reddit.com/r/([A-Za-z0-9_-]+)"
+# while check_num_unprocessed(queue_table=hyperlink_queue) > 0:
+#     subreddit_metadata_step(reddit, hyperlink_queue)
+#     snowball_step(edges_table=hyperlink_edges, queue_table=hyperlink_queue, edges_func=trace_hyperlink_ties)
+# print("Hyperlinks done.")
+#
+# # Scrape reference edges
 ref_queue, ref_edges = "t1b_reference_queue", "t1b_reference_ties"
+ref_exp = "(((^|\s)(/)?)|(reddit.com/))r/([A-Za-z0-9_-]+)"
 while check_num_unprocessed(queue_table=ref_queue) > 0:
-    snowball_step(edges_table=ref_edges, queue_table=ref_queue, edges_func=trace_reference_ties)
-    subreddit_metadata_step(reddit)
+    subreddit_metadata_step(reddit, ref_queue)
+    snowball_step(edges_table=ref_edges, queue_table=ref_queue, trace_regexp=ref_exp)
 print("References done.")
